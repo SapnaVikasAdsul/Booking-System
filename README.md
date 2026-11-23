@@ -2,36 +2,27 @@
 
 A Spring Boot REST API for creating time slots, booking them, and cancelling bookings. The API uses HTTP Basic authentication and stores data in a file-backed H2 database.
 
-## Setup and run
+## Setup and run on Windows
 
-Install **JDK 21** and run `java -version` to confirm the terminal sees it. The Maven Wrapper downloads Maven and the project dependencies on the first run.
+Install **JDK 21**. Open Windows Terminal and select a **Command Prompt** profile. If you already have the project, change to its root folder, the one containing `pom.xml`. Otherwise, clone it first.
 
-Clone the repository and open its root folder, which contains `pom.xml`.
-
-```text
+```bat
 git clone https://github.com/SapnaVikasAdsul/Booking-System.git
 cd Booking-System
 ```
 
-Set passwords for the `user` and `admin` accounts before starting the app.
+Check that `java -version` reports Java 21. Replace the password placeholders below and run all four commands in the same Command Prompt window. Use those passwords for the `user` and `admin` accounts when making API requests.
 
-**Windows PowerShell**
-
-```powershell
-$env:BOOKING_USER_PASSWORD = '<choose-a-user-password>'
-$env:BOOKING_ADMIN_PASSWORD = '<choose-an-admin-password>'
-.\mvnw.cmd spring-boot:run
+```bat
+java -version
+set "BOOKING_USER_PASSWORD=<choose-a-user-password>"
+set "BOOKING_ADMIN_PASSWORD=<choose-an-admin-password>"
+mvnw.cmd spring-boot:run
 ```
 
-**macOS or Linux**
+The Maven Wrapper downloads Maven and the project dependencies on the first run. Wait for `Started BookingSystemApplication`, then send API requests to `http://localhost:8080`. Leave the terminal open while testing and press **Ctrl+C** to stop the app.
 
-```sh
-export BOOKING_USER_PASSWORD='<choose-a-user-password>'
-export BOOKING_ADMIN_PASSWORD='<choose-an-admin-password>'
-sh ./mvnw spring-boot:run
-```
-
-The API listens at `http://localhost:8080`. Leave the startup terminal open while sending requests. Press **Ctrl+C** to stop the app. H2 stores its files under `./data/` using the database name `bookingdb`. Bookings and slot statuses survive a restart when the app uses the same database.
+H2 stores its files under `./data/` using the database name `bookingdb`. Bookings and slot statuses survive a restart when the app uses the same database.
 
 ## API request flow
 
@@ -39,49 +30,18 @@ Send HTTP Basic credentials on every request. The `user` account has the `USER` 
 
 | Method and path | Who can use it | Request and result |
 | --- | --- | --- |
-| `POST /slots` | `ADMIN` | Send `startTime` and `endTime` as ISO 8601 timestamps. Returns `201 Created` with the new `AVAILABLE` slot and its ID. |
+| `POST /slots` | `ADMIN` | Send `startTime` and `endTime` as ISO 8601 timestamps. Returns `201 Created` with the new `AVAILABLE` slot and its ID. Matching start and end times return `409 Conflict` with `SLOT_ALREADY_EXISTS`. |
 | `GET /slots` | `USER` or `ADMIN` | Returns `200 OK` and lists both `AVAILABLE` and `BOOKED` slots, ordered by start time and ID. |
 | `POST /bookings` | `USER` | Send `{"slotId": 1}` using a slot ID from the list. Returns `201 Created` with the booking ID and status `ACTIVE`. |
 | `POST /bookings/{id}/cancel` | `USER` who owns the booking | Use the booking ID in the path. Returns `204 No Content`. |
 | `POST /admin/bookings/{id}/cancel` | `ADMIN` | Use the booking ID in the path for any booking. Returns `204 No Content`. |
-
-### Example from PowerShell
-
-In a second terminal, set `BOOKING_USER_PASSWORD` and `BOOKING_ADMIN_PASSWORD` to the same values used to start the app. The example creates a slot as admin, books it as user, and cancels it as the same user.
-
-```powershell
-function Get-BookingHeaders($username, $password) {
-    $credentials = '{0}:{1}' -f $username, $password
-    $token = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($credentials))
-    return @{ Authorization = "Basic $token" }
-}
-
-$baseUrl = 'http://localhost:8080'
-$adminHeaders = Get-BookingHeaders 'admin' $env:BOOKING_ADMIN_PASSWORD
-$userHeaders = Get-BookingHeaders 'user' $env:BOOKING_USER_PASSWORD
-
-$slotBody = @{
-    startTime = '2030-01-01T10:00:00Z'
-    endTime = '2030-01-01T11:00:00Z'
-} | ConvertTo-Json
-$slot = Invoke-RestMethod -Method Post -Uri "$baseUrl/slots" `
-    -Headers $adminHeaders -ContentType 'application/json' -Body $slotBody
-Invoke-RestMethod -Method Get -Uri "$baseUrl/slots" -Headers $userHeaders
-
-$bookingBody = @{ slotId = $slot.id } | ConvertTo-Json
-$booking = Invoke-RestMethod -Method Post -Uri "$baseUrl/bookings" `
-    -Headers $userHeaders -ContentType 'application/json' -Body $bookingBody
-Invoke-RestMethod -Method Post -Uri "$baseUrl/bookings/$($booking.id)/cancel" -Headers $userHeaders
-```
-
-Missing or invalid credentials return `401 Unauthorized`. A role or booking ownership violation returns `403 Forbidden`. An unknown slot or booking returns `404 Not Found`.
 
 ## Locking and transaction boundaries
 
 The project uses **pessimistic write locks in H2**. `SlotRepository.findByIdForUpdate` takes a database row lock using JPA's `PESSIMISTIC_WRITE`. The lock lasts until the transaction commits or rolls back.
 
 - **Booking.** `BookingService.book` runs in one `@Transactional` method. It locks the slot before reading its status. If the slot is `AVAILABLE`, the method marks it `BOOKED` and inserts an `ACTIVE` booking. Both writes commit or roll back together.
-- **Cancellation.** `BookingService.cancel` locks the booking row, checks who can cancel it, and locks its slot before updating either record. The booking becomes `CANCELLED` and the slot becomes `AVAILABLE` in the same transaction. Repeating a cancellation leaves the current slot state intact.
+- **Cancellation.** `BookingService.cancel` locks the booking row, checks who can cancel it, and locks its slot before updating either record. The booking becomes `CANCELLED` and the slot becomes `AVAILABLE` in the same transaction. Cancelling an already-cancelled booking returns `409 Conflict` with `BOOKING_ALREADY_CANCELLED`. A later booking for that slot stays active.
 
 ### Two requests for the same slot
 
@@ -98,6 +58,6 @@ If A rolls back, B can acquire the lock and book the still-available slot. If B 
 ## Assumptions and design decisions
 
 - Each slot can have **one active booking**. Cancellation keeps the existing booking for history and lets another user book the slot.
-- Slots represent independent entries created by an admin. A slot's start time must precede its end time. The system allows separate slots to overlap.
+- Slots represent independent entries created by an admin. A slot's start time must precede its end time. Slots with different time ranges can overlap. Slot creation locks an H2 row while checking for duplicates and inserting a new slot, so identical concurrent requests cannot both succeed.
 - The service derives the booking's `userId` from the authenticated account. The H2 foreign key `bookings.slot_id` keeps each booking linked to its slot.
 - The default local accounts use passwords from environment variables. Each account is enabled when its password is set.

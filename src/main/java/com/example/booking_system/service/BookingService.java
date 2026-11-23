@@ -3,6 +3,7 @@ package com.example.booking_system.service;
 import com.example.booking_system.dto.BookingResponse;
 import com.example.booking_system.entity.Booking;
 import com.example.booking_system.entity.Slot;
+import com.example.booking_system.exception.BookingAlreadyCancelledException;
 import com.example.booking_system.exception.BookingNotFoundException;
 import com.example.booking_system.exception.SlotAlreadyBookedException;
 import com.example.booking_system.repository.BookingRepository;
@@ -43,7 +44,7 @@ public class BookingService {
             throw new AccessDeniedException("You can only cancel your own bookings");
         }
         if (booking.getStatus() == Booking.Status.CANCELLED) {
-            return;
+            throw new BookingAlreadyCancelledException(bookingId);
         }
 
         Slot slot = lockSlot(booking.getSlot().getId());

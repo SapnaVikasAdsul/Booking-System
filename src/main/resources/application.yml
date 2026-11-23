@@ -1,0 +1,40 @@
+spring:
+  application:
+    name: booking-system
+
+  datasource:
+    url: "jdbc:h2:file:./data/bookingdb"
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+
+  sql:
+    init:
+      mode: always
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+    open-in-view: false
+
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+
+# Local API accounts. Set the matching environment variables before starting the app.
+booking:
+  security:
+    accounts:
+      user:
+        id: 1
+        role: USER
+        password: "${BOOKING_USER_PASSWORD:}"
+      admin:
+        id: 2
+        role: ADMIN
+        password: "${BOOKING_ADMIN_PASSWORD:}"
